@@ -1,4 +1,5 @@
 import datetime
+import json
 import pandas as pd
 import streamlit as st
 
@@ -98,7 +99,7 @@ for key, val in st.session_state.shift_data.items():
 
 col_left, col_right = st.columns([1, 1.2])
 
-# --- 2. 作業日の登録（左側） ---
+# --- 2. 作業日の登録 ＆ データの保存/復元（左側） ---
 with col_left:
   st.subheader("1. 作業日の登録")
   st.caption("作業日名・ポイント数・csvの日付を設定してください。")
@@ -142,6 +143,71 @@ with col_left:
   if len(updated_projects) != len(st.session_state.projects):
     st.session_state.projects = updated_projects
     st.rerun()
+
+  # --- 💾 データの保存・復元ブロック ---
+  st.divider()
+  st.subheader("💾 データの保存・復元")
+  st.caption(
+      "次回も同じデータを使いたい場合は設定ファイルをダウンロードしてください。"
+  )
+
+  # ① 保存用のデータ構造を作成
+  export_projects = []
+  for p in st.session_state.projects:
+    export_projects.append({
+        "name": p["name"],
+        "tasks": p["tasks"],
+        "deadline": p["deadline"].strftime("%Y-%m-%d"),
+    })
+
+  export_data = {
+      "projects": export_projects,
+      "shift_data": st.session_state.shift_data,
+  }
+
+  json_bytes = json.dumps(
+      export_data, ensure_ascii=False, indent=2
+  ).encode("utf-8")
+
+  # ② ダウンロードボタン
+  st.download_button(
+      label="📥 設定（JSON）をダウンロード",
+      data=json_bytes,
+      file_name=f"shift_app_settings_{today.strftime('%Y%m%d')}.json",
+      mime="application/json",
+      use_container_width=True,
+  )
+
+  # ③ 復元用ファイルアップローダー
+  uploaded_file = st.file_uploader(
+      "📤 設定（JSON）を読み込んで復元", type=["json"]
+  )
+  if uploaded_file is not None:
+    try:
+      imported_data = json.load(uploaded_file)
+
+      # 作業日リスト復元
+      new_projects = []
+      for p in imported_data.get("projects", []):
+        new_projects.append({
+            "name": p["name"],
+            "tasks": p["tasks"],
+            "deadline": datetime.datetime.strptime(
+                p["deadline"], "%Y-%m-%d"
+            ).date(),
+        })
+      st.session_state.projects = new_projects
+
+      # シフトデータ復元
+      imported_shift = imported_data.get("shift_data", {})
+      for k, v in imported_shift.items():
+        st.session_state[k] = v
+        st.session_state.shift_data[k] = v
+
+      st.success("✅ 設定を復元しました！")
+      st.rerun()
+    except Exception as e:
+      st.error(f"ファイルの読み込みに失敗しました: {e}")
 
 # --- 3. 日別の出勤シフト設定（右側） ---
 with col_right:
@@ -276,7 +342,7 @@ else:
   # 各作業日の詳細ログ保持用リスト
   for p in project_queue:
     p["remaining"] = p["tasks"]
-    p["daily_breakdown"] = []  # {'date_str': '08/10(月)', 'pt': 10.0}
+    p["daily_breakdown"] = []
     p["start_date"] = None
     p["completed_date"] = None
 
@@ -295,14 +361,12 @@ else:
       w_str = weekdays_ja[target_date.weekday()]
       d_str = f"{target_date.strftime('%m/%d')}({w_str})"
 
-      # この日に進めるポイント数
       work_done = min(work_left, curr_p["remaining"])
       curr_p["remaining"] -= work_done
       work_left -= work_done
 
       curr_p["daily_breakdown"].append({"date_str": d_str, "pt": work_done})
 
-      # ポイント消化完了時
       if curr_p["remaining"] == 0:
         curr_p["completed_date"] = target_date
         current_p_idx += 1
@@ -323,7 +387,6 @@ else:
       s_w = weekdays_ja[p["start_date"].weekday()]
       start_str = f"{p["start_date"].strftime('%m/%d')}({s_w})"
 
-    # 【判定条件】完了日が「csv前日以前」ならOK
     if p["completed_date"]:
       comp_w = weekdays_ja[p["completed_date"].weekday()]
       comp_str = f"{p["completed_date"].strftime('%m/%d')}({comp_w})"
@@ -334,7 +397,6 @@ else:
       is_on_time = False
       delay_days = None
 
-    # csv前日時点での消化状況・不足pt計算
     done_by_limit = sum(
         cap
         for d_date, cap in shift_schedule.items()
@@ -384,7 +446,6 @@ else:
       start_info = f"🚀 着手: **{res['start_date_str']}**\n\n"
 
       if res["is_on_time"]:
-        # csv前日までの余裕日数
         limit_date = res["deadline"] - datetime.timedelta(days=1)
         margin = (limit_date - res["completed_date"]).days
         st.success(
@@ -410,7 +471,6 @@ else:
             f"⚠️ **未完了！（前日時点: {res['shortage_pt']:g}pt 不足）**"
         )
 
-      # 日別の着手内訳を表示するアコーディオン
       with st.expander("📅 日別の着手内訳を見る"):
         if res["daily_breakdown"]:
           for b in res["daily_breakdown"]:
