@@ -97,6 +97,12 @@ for key, val in st.session_state.shift_data.items():
   if key not in st.session_state:
     st.session_state[key] = val
 
+# ウィジェットキーの同期保証
+for i, p in enumerate(st.session_state.projects):
+  st.session_state[f"p_name_{i}"] = p["name"]
+  st.session_state[f"p_task_{i}"] = p["tasks"]
+  st.session_state[f"p_dl_{i}"] = p["deadline"]
+
 col_left, col_right = st.columns([1, 1.2])
 
 # --- 2. 作業日の登録 ＆ データの保存/復元（左側） ---
@@ -125,13 +131,9 @@ with col_left:
   updated_projects = []
   for i, p in enumerate(st.session_state.projects):
     c1, c2, c3, c4 = st.columns([2, 1.5, 2, 1])
-    name = c1.text_input(f"作業日{i+1}", value=p["name"], key=f"p_name_{i}")
-    tasks = c2.number_input(
-        f"pt数{i+1}", min_value=0, value=p["tasks"], key=f"p_task_{i}"
-    )
-
-    default_dl = p.get("deadline", today + datetime.timedelta(days=3))
-    deadline = c3.date_input(f"csv{i+1}", value=default_dl, key=f"p_dl_{i}")
+    name = c1.text_input(f"作業日{i+1}", key=f"p_name_{i}")
+    tasks = c2.number_input(f"pt数{i+1}", min_value=0, key=f"p_task_{i}")
+    deadline = c3.date_input(f"csv{i+1}", key=f"p_dl_{i}")
 
     delete = c4.button("削除", key=f"del_{i}")
 
@@ -151,7 +153,7 @@ with col_left:
       "次回も同じデータを使いたい場合は設定ファイルをダウンロードしてください。"
   )
 
-  # ① 保存用のデータ構造を作成
+  # ① 現在の最新の入力状態を保存用データに変換
   export_projects = []
   for p in st.session_state.projects:
     export_projects.append({
@@ -186,16 +188,24 @@ with col_left:
     try:
       imported_data = json.load(uploaded_file)
 
+      # 古いウィジェットキーを一旦クリア
+      for k in list(st.session_state.keys()):
+        if k.startswith("p_name_") or k.startswith("p_task_") or k.startswith("p_dl_"):
+          del st.session_state[k]
+
       # 作業日リスト復元
       new_projects = []
-      for p in imported_data.get("projects", []):
+      for idx, p in enumerate(imported_data.get("projects", [])):
+        dl_obj = datetime.datetime.strptime(p["deadline"], "%Y-%m-%d").date()
         new_projects.append({
             "name": p["name"],
             "tasks": p["tasks"],
-            "deadline": datetime.datetime.strptime(
-                p["deadline"], "%Y-%m-%d"
-            ).date(),
+            "deadline": dl_obj,
         })
+        st.session_state[f"p_name_{idx}"] = p["name"]
+        st.session_state[f"p_task_{idx}"] = p["tasks"]
+        st.session_state[f"p_dl_{idx}"] = dl_obj
+
       st.session_state.projects = new_projects
 
       # シフトデータ復元
@@ -385,11 +395,11 @@ else:
     start_str = "-"
     if p["start_date"]:
       s_w = weekdays_ja[p["start_date"].weekday()]
-      start_str = f"{p["start_date"].strftime('%m/%d')}({s_w})"
+      start_str = f"{p['start_date'].strftime('%m/%d')}({s_w})"
 
     if p["completed_date"]:
       comp_w = weekdays_ja[p["completed_date"].weekday()]
-      comp_str = f"{p["completed_date"].strftime('%m/%d')}({comp_w})"
+      comp_str = f"{p['completed_date'].strftime('%m/%d')}({comp_w})"
       is_on_time = p["completed_date"] <= required_completion_limit
       delay_days = (p["completed_date"] - required_completion_limit).days
     else:
